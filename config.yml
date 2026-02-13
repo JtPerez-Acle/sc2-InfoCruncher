@@ -1,0 +1,49 @@
+# Check `ares-sc2/src/ares/config.yml` for valid config options
+# Use this to override those values
+# Can add own unique config options here if desired
+
+# Set custom values here for your bot
+MyBotName: InfoGainBot
+MyBotRace: Zerg
+# setting ture allows auto upload to aiareana (https://aiarena.net/) on push to `main` branch
+# see tutorial on readme before setting to True
+AutoUploadToAiarena: False
+########################
+
+UseData: False
+Debug: False
+GameStep: 2
+DebugGameStep: 2
+
+# Turn ares features on/off for performance reasons
+Features:
+    # this grid is useful for disruptor balls and maybe some other uses
+    # off by default to save computation
+    TacticalGroundGrid: False
+
+DebugOptions:
+    # one of: Air, AirVsGround, Ground, GroundAvoidance, AirAvoidance
+    ActiveGrid: TacticalGround
+    ChatDebug: True
+    DebugSpawn: False
+    ShowPathingCost: True
+    ResourceDebug: False
+    ShowBuildingFormation: False
+
+# Instrumentation: every game generates training data for Phase 3
+Logging:
+    Enabled: True
+    StateSnapshotInterval: 5
+    DecisionTracing: True
+    EventLogging: True
+    FlushInterval: 50
+    DeltaTracking: True
+    LogDirectory: "data/logs"
+
+# Info-gain observation scheduler (Phase 3)
+InfoGain:
+    Enabled: False
+    ObservationBudget: 0.4
+    CombatGuard: True
+    ProductionDiscount: 0.7
+    MinObserveInterval: 3

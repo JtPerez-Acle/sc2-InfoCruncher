@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "sc2-infogain-bot"
+version = "0.1.0"
+description = "SC2 bot using information-gain scheduling for adaptive attention"
+authors = []
+package-mode = false
+packages = [{include = "ares-sc2/src/ares"}]
+
+[tool.poetry.dependencies]
+ares-sc2 = { path = "ares-sc2", develop = false }
+python = ">=3.11, <3.13"
+black = "^23.1.0"
+isort = "^5.12.0"
+requests = "^2.32.3"
+pyinstaller = "^6.14.2"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^7.2"
+pytest-asyncio = "^0.21"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider -v"
+
+[tool.black]
+extend-exclude = 'ares-sc2/*'
+
+[tool.isort]
+profile = "black"
+skip_glob = ["ares-sc2/*"]

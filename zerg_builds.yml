@@ -1,0 +1,47 @@
+UseData: False
+BuildSelection: Cycle
+MinGamesWinrateBased: 3
+
+BuildChoices:
+    test_123:
+        BotName: InfoGainBot
+        Cycle:
+            - StandardMacro
+    Protoss:
+        BotName: InfoGainBot
+        Cycle:
+            - StandardMacro
+    Random:
+        BotName: InfoGainBot
+        Cycle:
+            - StandardMacro
+    Terran:
+        BotName: InfoGainBot
+        Cycle:
+            - StandardMacro
+    Zerg:
+        BotName: InfoGainBot
+        Cycle:
+            - StandardMacro
+
+Builds:
+    StandardMacro:
+        ConstantWorkerProductionTill: 44
+        AutoSupplyAtSupply: 15
+        PersistentWorker: False
+        OpeningBuildOrder:
+            - "13 supply"
+            - "16 expand"
+            - "18 gas"
+            - "17 SPAWNINGPOOL"
+            - "19 supply"
+            - "20 QUEEN"
+            - "20 QUEEN"
+            - "20 ZERGLING"
+            - "20 ZERGLING"
+            - "24 ZERGLINGMOVEMENTSPEED"
+            - 24 overlord_scout:
+                  - enemy_nat_vision
+                  - enemy_nat_hg_spot
+            - "30 QUEEN"
+            - "30 expand"

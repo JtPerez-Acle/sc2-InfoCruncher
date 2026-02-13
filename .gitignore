@@ -1,0 +1,59 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# mypy
+.mypy_cache/
+
+# Game data (logs, replays, analysis — regenerated each run)
+data/logs/
+data/analysis/
+data/saved_logs/
+data/replays/
+data/models/
+
+# Claude Code local config
+.claude/
+
+# Windows artifacts
+nul
+Thumbs.db
+Desktop.ini
+
+# SC2 map files (too large for git)
+*.SC2Map
