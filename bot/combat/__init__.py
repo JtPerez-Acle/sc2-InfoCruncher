@@ -27,6 +27,7 @@ from bot.combat.awareness import BattlefieldAwareness
 from bot.combat.constants import (
     CombatObjective,
     CombatPlan,
+    MIN_ATTACK_ARMY_SUPPLY,
     RALLYING_ROLE,
     SquadRole,
 )
@@ -52,6 +53,7 @@ class CombatSystem:
         self.executor = TacticalExecutor(ai)
 
         self._plan: CombatPlan = CombatPlan()
+        self._prev_objective: CombatObjective = CombatObjective.REGROUP
         self._last_log_time: float = 0.0
 
     # ------------------------------------------------------------------
@@ -115,6 +117,29 @@ class CombatSystem:
         # Layer 2: Decision
         plan = self.planner.plan(battlefield, strategy)
         self._plan = plan
+
+        # Force-end engagement only on TRANSITION to DEFEND/REGROUP
+        prev_objective = self._prev_objective
+        self._prev_objective = plan.objective
+        if (plan.objective in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+                and prev_objective not in (CombatObjective.DEFEND, CombatObjective.REGROUP)):
+            eng_tracker = getattr(ai, "_engagement_tracker", None)
+            if eng_tracker:
+                # Build combat-only dict (excludes drones/overlords/eggs)
+                combat_dict: dict = {}
+                for role in (UnitRole.ATTACKING, RALLYING_ROLE):
+                    for u in (ai.mediator.get_units_from_role(role=role) or []):
+                        combat_dict.setdefault(u.type_id, []).append(u)
+                record = eng_tracker.force_end(
+                    ai.time,
+                    ai.state.game_loop,
+                    combat_dict,
+                    list(ai.enemy_units or []),
+                )
+                if record is not None:
+                    eng_logger = getattr(ai, "game_logger", None)
+                    if eng_logger:
+                        eng_logger._write(record)
 
         # Layer 3: Execution
         summary = self.executor.execute(plan, strategy)
@@ -204,18 +229,26 @@ class CombatSystem:
             # Keep rallying units in RALLYING_ROLE
             return
 
-        # Attack modes: promote rallying to attacking
+        # Attack modes: promote rallying to attacking only when we have enough supply
         rallying: Units = ai.mediator.get_units_from_role(role=RALLYING_ROLE)
         if rallying and len(rallying) > 0:
-            ai.mediator.switch_roles(
-                from_role=RALLYING_ROLE, to_role=UnitRole.ATTACKING,
-            )
-            logger = getattr(ai, "game_logger", None)
-            if logger:
-                logger.log_decision("combat_system", "promote_rallying", {
-                    "count": len(rallying),
-                    "objective": plan.objective.name,
-                })
+            attacking: Units = ai.mediator.get_units_from_role(role=UnitRole.ATTACKING)
+            attacking_supply = sum(u._type_data._proto.food_required for u in attacking) if attacking else 0
+            rallying_supply = sum(u._type_data._proto.food_required for u in rallying)
+            total_supply = attacking_supply + rallying_supply
+
+            # Only promote if combined army meets minimum threshold
+            if total_supply >= MIN_ATTACK_ARMY_SUPPLY:
+                ai.mediator.switch_roles(
+                    from_role=RALLYING_ROLE, to_role=UnitRole.ATTACKING,
+                )
+                logger = getattr(ai, "game_logger", None)
+                if logger:
+                    logger.log_decision("combat_system", "promote_rallying", {
+                        "count": len(rallying),
+                        "total_supply": round(total_supply, 1),
+                        "objective": plan.objective.name,
+                    })
 
         # Also promote any lingering defenders back to attacking
         defenders: Units = ai.mediator.get_units_from_role(role=UnitRole.DEFENDING)

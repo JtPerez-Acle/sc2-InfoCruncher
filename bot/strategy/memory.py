@@ -30,6 +30,7 @@ class EnemySnapshot:
     count: int
     last_seen_time: float
     total_value: float  # count * unit_value at time of observation
+    first_seen_time: float = 0.0  # when this type was first observed
 
 
 @dataclass
@@ -78,6 +79,7 @@ class StrategicMemory:
 
         # --- Spending tracking ---
         self._float_start_time: float | None = None
+        self.last_spending: SpendingDiagnosis | None = None
 
     # ------------------------------------------------------------------
     # Update from current observations
@@ -106,6 +108,9 @@ class StrategicMemory:
                     count=count,
                     last_seen_time=game_time,
                     total_value=value,
+                    first_seen_time=(
+                        existing.first_seen_time if existing else game_time
+                    ),
                 )
             elif count > 0:
                 # Update last_seen even if count didn't increase
@@ -183,6 +188,21 @@ class StrategicMemory:
             return game_time  # never seen enemy
         return game_time - self._last_observation_time
 
+    def get_discovery_timeline(self) -> list[tuple[float, str, int]]:
+        """Return chronological list of (first_seen_time, unit_type_name, count).
+
+        Sorted by first_seen_time. Used for opponent modeling features.
+        """
+        timeline = []
+        for unit_type, snapshot in self.enemy_history.items():
+            timeline.append((
+                snapshot.first_seen_time,
+                unit_type.name,
+                snapshot.count,
+            ))
+        timeline.sort(key=lambda t: t[0])
+        return timeline
+
     # ------------------------------------------------------------------
     # Spending diagnosis
     # ------------------------------------------------------------------
@@ -257,4 +277,5 @@ class StrategicMemory:
                     gas_weight += proportion
             diagnosis.is_gas_bound = gas_weight > 0.4
 
+        self.last_spending = diagnosis
         return diagnosis

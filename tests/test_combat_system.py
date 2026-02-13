@@ -31,7 +31,9 @@ from bot.combat.constants import (
     FAST_TYPES,
     FLYER_TYPES,
     MELEE_TYPES,
+    MIN_ATTACK_ARMY_SUPPLY,
     MIN_ATTACK_SUPPLY,
+    MIN_REGROUP_DURATION,
     OpportunityTarget,
     RALLYING_ROLE,
     RANGED_TYPES,
@@ -624,3 +626,369 @@ class TestProfileCoverage:
         for name, profile in ENGAGEMENT_PROFILES.items():
             for target in profile.avoid_targets:
                 assert isinstance(target, UnitID), f"{name} has non-UnitID avoid target: {target}"
+
+
+# ==========================================================================
+# REGROUP / TRICKLE ATTACK PREVENTION TESTS
+# ==========================================================================
+
+
+class _MockPlannerAI:
+    """Minimal AI mock for CombatPlanner instantiation."""
+    def __init__(self):
+        self.start_location = Point2((30, 30))
+        self.game_logger = None
+
+
+class TestRegroupDuration:
+    """Tests for minimum regroup duration and army supply gate."""
+
+    def setup_method(self):
+        from bot.combat.planner import CombatPlanner
+        self.planner = CombatPlanner(_MockPlannerAI())
+
+    def test_regroup_enforces_minimum_duration(self):
+        """Army below MIN_ATTACK_ARMY_SUPPLY should stay in regroup
+        even if above MIN_ATTACK_SUPPLY, during minimum duration."""
+        bf = BattlefieldState(our_army_supply=25.0, game_time=100.0)
+        # Simulate having just entered regroup
+        self.planner._regroup_start_time = 99.0
+        assert self.planner._should_regroup(bf, None, 100.0) is True
+
+    def test_regroup_exits_after_duration_with_supply(self):
+        """Army above MIN_ATTACK_ARMY_SUPPLY exits regroup after min duration."""
+        bf = BattlefieldState(
+            our_army_supply=MIN_ATTACK_ARMY_SUPPLY + 5,
+            game_time=120.0,
+            peak_army_supply=60.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 100.0
+        result = self.planner._should_regroup(bf, None, 120.0)
+        assert result is False
+
+    def test_regroup_stays_if_low_supply(self):
+        """Army below MIN_ATTACK_ARMY_SUPPLY stays in regroup regardless of time."""
+        bf = BattlefieldState(
+            our_army_supply=MIN_ATTACK_ARMY_SUPPLY - 5,
+            game_time=200.0,
+            peak_army_supply=60.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 100.0
+        result = self.planner._should_regroup(bf, None, 200.0)
+        assert result is True
+
+    def test_regroup_start_time_set_on_plan(self):
+        """_plan_regroup sets _regroup_start_time when first called."""
+        bf = BattlefieldState(
+            our_army_supply=15.0,
+            game_time=50.0,
+            staging_point=Point2((40, 40)),
+        )
+        profile = get_profile("UNKNOWN")
+        assert self.planner._regroup_start_time == 0.0
+        self.planner._plan_regroup(bf, profile)
+        assert self.planner._regroup_start_time == 50.0
+
+    def test_regroup_timer_not_overwritten(self):
+        """_plan_regroup should not overwrite an existing start time."""
+        bf = BattlefieldState(
+            our_army_supply=15.0,
+            game_time=80.0,
+            staging_point=Point2((40, 40)),
+        )
+        profile = get_profile("UNKNOWN")
+        # First call sets start time
+        self.planner._plan_regroup(bf, profile)
+        assert self.planner._regroup_start_time == 80.0
+        # Second call at later time should NOT overwrite
+        bf2 = BattlefieldState(
+            our_army_supply=20.0,
+            game_time=90.0,
+            staging_point=Point2((40, 40)),
+        )
+        self.planner._plan_regroup(bf2, profile)
+        assert self.planner._regroup_start_time == 80.0  # preserved
+
+    def test_constants_exist(self):
+        """New constants should exist with expected values."""
+        assert MIN_REGROUP_DURATION == 15.0
+        assert MIN_ATTACK_ARMY_SUPPLY == 40.0
+
+    def test_regroup_soft_gate_with_attack_ready(self):
+        """When strategy.attack_ready=True, allow attack at lower supply (30+)."""
+        strategy = SimpleNamespace(attack_ready=True)
+        # 35 supply: above 30 (MIN_ATTACK_SUPPLY*1.5) but below 40
+        bf = BattlefieldState(
+            our_army_supply=35.0,
+            game_time=200.0,
+            peak_army_supply=60.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 0.0
+        result = self.planner._should_regroup(bf, strategy, 200.0)
+        assert result is False, "With attack_ready + 35 supply, should NOT regroup"
+
+    def test_regroup_hard_gate_without_attack_ready(self):
+        """Without attack_ready, require full MIN_ATTACK_ARMY_SUPPLY (40)."""
+        strategy = SimpleNamespace(attack_ready=False)
+        # 35 supply: below 40 and attack_ready=False
+        bf = BattlefieldState(
+            our_army_supply=35.0,
+            game_time=200.0,
+            peak_army_supply=60.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 0.0
+        result = self.planner._should_regroup(bf, strategy, 200.0)
+        assert result is True, "Without attack_ready + 35 supply, SHOULD regroup"
+
+
+class TestEngagementForceEnd:
+    """Tests for force_end only firing on objective transitions."""
+
+    def test_force_end_only_on_objective_transition(self):
+        """force_end should NOT fire when staying in DEFEND/REGROUP."""
+        from bot.combat.constants import CombatObjective
+
+        # Simulate _prev_objective tracking
+        prev = CombatObjective.DEFEND
+        current = CombatObjective.DEFEND
+
+        # Same objective — should NOT force_end
+        should_force = (
+            current in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+            and prev not in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+        )
+        assert should_force is False
+
+        # Transition from ATTACK to DEFEND — SHOULD force_end
+        prev = CombatObjective.ATTACK_BASE
+        should_force = (
+            current in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+            and prev not in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+        )
+        assert should_force is True
+
+        # Transition from REGROUP to DEFEND — should NOT force_end
+        prev = CombatObjective.REGROUP
+        current = CombatObjective.DEFEND
+        should_force = (
+            current in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+            and prev not in (CombatObjective.DEFEND, CombatObjective.REGROUP)
+        )
+        assert should_force is False
+
+
+# ==========================================================================
+# EXECUTOR MICRO CHAIN TESTS
+# ==========================================================================
+
+
+class MockManeuverCapture:
+    """Captures behaviors added to a CombatManeuver for test inspection."""
+
+    def __init__(self):
+        self.behaviors: list = []
+
+    def add(self, behavior):
+        self.behaviors.append(behavior)
+
+    def behavior_types(self) -> list[str]:
+        return [type(b).__name__ for b in self.behaviors]
+
+
+class _MockUnitsClosest:
+    """Mock Units with closest_to() for executor tests."""
+
+    def __init__(self, units):
+        self._units = units
+
+    def __len__(self):
+        return len(self._units)
+
+    def closest_to(self, u):
+        return min(self._units, key=lambda e: u.distance_to(e))
+
+
+class _MockExecutorAI:
+    """Minimal mock AI for TacticalExecutor tests."""
+
+    def __init__(self):
+        self.start_location = MockPoint2(30, 30)
+
+    class mediator:
+        @staticmethod
+        def get_own_nat():
+            return MockPoint2(40, 40)
+
+
+class TestExecutorMicroChain:
+    """Test that the executor builds correct behavior chains.
+
+    Verifies that ranged units get Stutter behaviors (not AttackTarget)
+    and melee units get AttackTarget (not Stutter).
+    """
+
+    def setup_method(self):
+        from bot.combat.executor import TacticalExecutor
+
+        self.executor = TacticalExecutor(_MockExecutorAI())
+
+    # -- Fix 1: Expanded RANGED_TYPES --
+
+    def test_expanded_ranged_types(self):
+        """RANGED_TYPES should include all ranged Zerg combat units."""
+        expected = {
+            UnitID.ROACH, UnitID.HYDRALISK, UnitID.RAVAGER,
+            UnitID.QUEEN, UnitID.CORRUPTOR, UnitID.MUTALISK,
+            UnitID.BROODLORD, UnitID.INFESTOR, UnitID.VIPER,
+        }
+        for uid in expected:
+            assert uid in RANGED_TYPES, f"{uid} missing from RANGED_TYPES"
+
+    # -- Fix 2/3: Ranged gets Stutter, melee gets AttackTarget --
+
+    def test_ranged_gets_stutter_back_in_attack(self):
+        """Ranged unit with STUTTER_BACK profile should get StutterUnitBack."""
+        maneuver = MockManeuverCapture()
+        unit = MockCombatUnit(type_id=UnitID.HYDRALISK, position=MockPoint2(50, 50))
+        enemy = MockCombatUnit(tag=99, type_id=UnitID.MARINE, position=MockPoint2(55, 50))
+        profile = get_profile("DEFAULT")  # kite_style=STUTTER_BACK
+        target = MockPoint2(60, 50)
+        nearby = _MockUnitsClosest([enemy])
+
+        self.executor._micro_attack(
+            unit, maneuver, target, nearby, [enemy], profile, None, enemy,
+        )
+        types = maneuver.behavior_types()
+        assert "StutterUnitBack" in types, f"Expected StutterUnitBack, got {types}"
+        assert "AttackTarget" not in types, f"AttackTarget should not be in ranged chain"
+
+    def test_melee_gets_attack_target(self):
+        """Melee unit should get AttackTarget, not Stutter behaviors."""
+        maneuver = MockManeuverCapture()
+        unit = MockCombatUnit(type_id=UnitID.ZERGLING, position=MockPoint2(50, 50))
+        enemy = MockCombatUnit(tag=99, type_id=UnitID.MARINE, position=MockPoint2(55, 50))
+        profile = get_profile("DEFAULT")
+        target = MockPoint2(60, 50)
+        nearby = _MockUnitsClosest([enemy])
+
+        self.executor._micro_attack(
+            unit, maneuver, target, nearby, [enemy], profile, None, enemy,
+        )
+        types = maneuver.behavior_types()
+        assert "AttackTarget" in types, f"Expected AttackTarget for melee, got {types}"
+        assert "StutterUnitBack" not in types
+        assert "StutterUnitForward" not in types
+
+    def test_chase_ranged_gets_stutter_forward(self):
+        """Ranged unit in chase style should get StutterUnitForward."""
+        maneuver = MockManeuverCapture()
+        unit = MockCombatUnit(type_id=UnitID.ROACH, position=MockPoint2(50, 50))
+        enemy = MockCombatUnit(tag=99, type_id=UnitID.MARINE, position=MockPoint2(55, 50))
+        profile = get_profile("DEFAULT")
+        target = MockPoint2(60, 50)
+        nearby = _MockUnitsClosest([enemy])
+
+        self.executor._micro_chase(
+            unit, maneuver, target, nearby, [enemy], profile, None, enemy,
+        )
+        types = maneuver.behavior_types()
+        assert "StutterUnitForward" in types, f"Expected StutterUnitForward in chase, got {types}"
+        assert "AttackTarget" not in types
+
+    def test_retreat_ranged_gets_stutter_back(self):
+        """Ranged unit in retreat should get StutterUnitBack to shoot while kiting."""
+        maneuver = MockManeuverCapture()
+        unit = MockCombatUnit(type_id=UnitID.HYDRALISK, position=MockPoint2(50, 50))
+        enemy = MockCombatUnit(tag=99, type_id=UnitID.MARINE, position=MockPoint2(55, 50))
+        profile = get_profile("DEFAULT")
+        target = MockPoint2(60, 50)
+
+        self.executor._micro_retreat(
+            unit, maneuver, target, [enemy], profile, None, enemy,
+        )
+        types = maneuver.behavior_types()
+        assert "StutterUnitBack" in types, f"Expected StutterUnitBack in retreat, got {types}"
+
+    def test_stutter_forward_profile_uses_forward(self):
+        """Profile with STUTTER_FORWARD kite_style should use StutterUnitForward."""
+        maneuver = MockManeuverCapture()
+        unit = MockCombatUnit(type_id=UnitID.HYDRALISK, position=MockPoint2(50, 50))
+        enemy = MockCombatUnit(tag=99, type_id=UnitID.MARINE, position=MockPoint2(55, 50))
+        profile = get_profile("MACRO")  # kite_style=STUTTER_FORWARD
+        target = MockPoint2(60, 50)
+        nearby = _MockUnitsClosest([enemy])
+
+        self.executor._micro_attack(
+            unit, maneuver, target, nearby, [enemy], profile, None, enemy,
+        )
+        types = maneuver.behavior_types()
+        assert "StutterUnitForward" in types, f"Expected StutterUnitForward for MACRO, got {types}"
+        assert "StutterUnitBack" not in types
+
+
+# ==========================================================================
+# ROUND 5: REGROUP ANTI-TRICKLE + LATE_ZERG PROFILE
+# ==========================================================================
+
+
+class TestRegroupAntiTrickle:
+    """Test regroup duration enforcement and peak-scaled minimum supply."""
+
+    def setup_method(self):
+        from bot.combat.planner import CombatPlanner
+        self.planner = CombatPlanner(_MockPlannerAI())
+
+    def test_regroup_duration_enforced_above_min_supply(self):
+        """Even with supply > 40, regroup duration should be enforced."""
+        bf = BattlefieldState(
+            our_army_supply=50.0,
+            game_time=105.0,
+            peak_army_supply=80.0,
+            last_wipe_time=0.0,
+        )
+        # Regroup started 5s ago — below MIN_REGROUP_DURATION (15s)
+        self.planner._regroup_start_time = 100.0
+        result = self.planner._should_regroup(bf, None, 105.0)
+        assert result is True, "Should enforce regroup duration even above min supply"
+
+    def test_regroup_scaled_minimum_from_peak(self):
+        """After high peak supply, require 40% of peak to attack."""
+        bf = BattlefieldState(
+            our_army_supply=45.0,
+            game_time=300.0,
+            peak_army_supply=120.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 200.0  # duration met
+        result = self.planner._should_regroup(bf, None, 300.0)
+        # 45 < 120 * 0.4 = 48, so should regroup
+        assert result is True, "45 supply should regroup with 120 peak (need 48)"
+
+    def test_regroup_exits_when_peak_minimum_met(self):
+        """Should exit regroup when supply exceeds 40% of peak."""
+        bf = BattlefieldState(
+            our_army_supply=55.0,
+            game_time=300.0,
+            peak_army_supply=120.0,
+            last_wipe_time=0.0,
+        )
+        self.planner._regroup_start_time = 200.0  # duration met
+        result = self.planner._should_regroup(bf, None, 300.0)
+        # 55 > 120 * 0.4 = 48, and duration met
+        assert result is False, "55 supply should attack with 120 peak (need 48)"
+
+
+class TestLateZergProfile:
+    """Test LATE_ZERG profile exists in ENGAGEMENT_PROFILES."""
+
+    def test_late_zerg_profile_exists(self):
+        profile = get_profile("LATE_ZERG")
+        assert profile.name == "LATE_ZERG"
+        assert UnitID.INFESTOR in profile.focus_targets
+        assert UnitID.VIPER in profile.focus_targets
+        assert profile.kite_style == KiteStyle.STUTTER_BACK
+        assert profile.spread_distance == 4.0

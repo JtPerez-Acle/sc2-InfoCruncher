@@ -186,6 +186,8 @@ class CombatPlan:
 
 RANGED_TYPES: set[UnitID] = {
     UnitID.ROACH, UnitID.HYDRALISK, UnitID.RAVAGER,
+    UnitID.QUEEN, UnitID.CORRUPTOR, UnitID.MUTALISK,
+    UnitID.BROODLORD, UnitID.INFESTOR, UnitID.VIPER,
 }
 MELEE_TYPES: set[UnitID] = {
     UnitID.ZERGLING, UnitID.BANELING, UnitID.ULTRALISK,
@@ -223,6 +225,8 @@ EXPANSION_TYPES: set[UnitID] = {
 # ---------------------------------------------------------------------------
 
 MIN_ATTACK_SUPPLY: float = 20.0
+MIN_ATTACK_ARMY_SUPPLY: float = 40.0
+MIN_REGROUP_DURATION: float = 15.0
 REGROUP_RATIO: float = 0.55
 WIPE_COOLDOWN: float = 15.0
 PEAK_DECAY_RATE: float = 0.15

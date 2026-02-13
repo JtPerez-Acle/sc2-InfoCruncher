@@ -183,6 +183,10 @@ class EconomyModel:
             target = max(1, target - 1)
         if vespene > 800 and vespene > minerals * 1.5:
             target = max(1, target - 2)
+        if vespene > 2000:
+            target = max(1, target - 3)
+        if vespene > 4000:
+            target = max(1, target - 5)
 
         # Don't over-gas early: cap at what we can mine
         return min(target, max_gas)
@@ -204,8 +208,8 @@ class EconomyModel:
         if num_bases < 2:
             return 2
 
-        # Don't expand above 5
-        if num_bases >= 5:
+        # Don't expand above 8
+        if num_bases >= 8:
             return num_bases
 
         # Don't expand under heavy pressure

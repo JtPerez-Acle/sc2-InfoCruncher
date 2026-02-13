@@ -61,6 +61,24 @@ def collect_state_snapshot(ai: AresBot, step: int) -> dict[str, Any]:
     snapshot["supply_army"] = ai.supply_used - ai.supply_workers
     snapshot["larva_count"] = len(ai.larva) if ai.larva else 0
 
+    # --- Income rates (from SC2 score API) ---
+    try:
+        snapshot["income_minerals"] = float(
+            ai.state.score.collection_rate_minerals
+        )
+        snapshot["income_vespene"] = float(
+            ai.state.score.collection_rate_vespene
+        )
+    except Exception:
+        snapshot["income_minerals"] = 0.0
+        snapshot["income_vespene"] = 0.0
+
+    # --- Saturation ratio ---
+    num_bases = len(ai.townhalls) if ai.townhalls else 1
+    snapshot["saturation_ratio"] = round(
+        ai.supply_workers / max(num_bases * 16, 1), 3
+    )
+
     # --- Own units ---
     own_army_dict = ai.mediator.get_own_army_dict
     snapshot["own_units"] = _count_by_type(own_army_dict)
@@ -182,5 +200,43 @@ def collect_state_snapshot(ai: AresBot, step: int) -> dict[str, Any]:
         snapshot["combat_profile"] = None
         snapshot["last_engagement_sim"] = None
         snapshot["last_engagement_value"] = None
+
+    # --- Strategic intelligence (if analyzer available) ---
+    try:
+        analyzer = ai.strategic_analyzer
+        strat = analyzer._cached_strategy
+
+        # Composition classification
+        if hasattr(strat, "threat") and strat.threat is not None:
+            snapshot["threat_level"] = round(strat.threat.threat_level, 3)
+            snapshot["army_advantage"] = round(strat.threat.army_advantage, 3)
+            snapshot["enemy_tech_level"] = strat.threat.enemy_tech_level
+            if hasattr(strat.threat, "enemy_archetype"):
+                snapshot["enemy_archetype"] = strat.threat.enemy_archetype
+            elif hasattr(analyzer, "classifier"):
+                # Fall back to classifier's last result
+                comp = getattr(analyzer.classifier, "_last_analysis", None)
+                if comp is not None:
+                    snapshot["enemy_archetype"] = comp.archetype.name
+                    snapshot["enemy_archetype_confidence"] = round(
+                        comp.confidence, 3
+                    )
+
+        # Info staleness
+        snapshot["info_staleness"] = round(
+            analyzer.memory.get_info_staleness(ai.time), 1
+        )
+
+        # Spending diagnosis (cached on memory to avoid recomputation)
+        spending = getattr(analyzer.memory, "last_spending", None)
+        if spending is not None:
+            snapshot["is_larva_bound"] = spending.is_larva_bound
+            snapshot["is_tech_bound"] = spending.is_tech_bound
+            snapshot["is_supply_bound"] = spending.is_supply_bound
+            snapshot["is_gas_bound"] = spending.is_gas_bound
+            snapshot["mineral_float"] = spending.mineral_float
+            snapshot["float_duration"] = round(spending.float_duration, 1)
+    except Exception:
+        pass  # All strategic fields remain absent (total=False in schema)
 
     return snapshot

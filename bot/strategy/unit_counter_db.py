@@ -564,6 +564,41 @@ COUNTER_MAP: dict[UnitID, list[UnitID]] = {
         UnitID.HYDRALISK,      # Anti-air DPS
         UnitID.INFESTOR,       # Fungal locks mutas in place
     ],
+    UnitID.RAVAGER: [
+        UnitID.ROACH,          # Armored, tanks bile
+        UnitID.HYDRALISK,      # Range + DPS
+        UnitID.MUTALISK,       # Can't shoot air
+    ],
+    UnitID.LURKERMP: [
+        UnitID.ROACH,          # Can fight from range, armored
+        UnitID.RAVAGER,        # Bile reveals and outranges lurkers
+        UnitID.MUTALISK,       # Can't shoot air, fly over burrow
+    ],
+    UnitID.INFESTOR: [
+        UnitID.ZERGLING,       # Cheap swarm, fungal wastes on lings
+        UnitID.ULTRALISK,      # Massive HP, fungal barely hurts
+        UnitID.MUTALISK,       # Fast, dodge fungal
+    ],
+    UnitID.SWARMHOSTMP: [
+        UnitID.MUTALISK,       # Fly over locusts, kill hosts
+        UnitID.RAVAGER,        # Bile kills hosts
+        UnitID.ZERGLING,       # Rush in between locust waves
+    ],
+    UnitID.VIPER: [
+        UnitID.HYDRALISK,      # Shoots air, high DPS
+        UnitID.CORRUPTOR,      # Air-to-air
+        UnitID.MUTALISK,       # Speed to catch vipers
+    ],
+    UnitID.ULTRALISK: [
+        UnitID.BROODLORD,      # Range + free broodlings, Ultras can't hit air
+        UnitID.SWARMHOSTMP,    # Free locusts, safe siege
+        UnitID.INFESTOR,       # Neural parasite, fungal slows
+    ],
+    UnitID.BROODLORD: [
+        UnitID.CORRUPTOR,      # Air-to-air counter
+        UnitID.HYDRALISK,      # Anti-air DPS
+        UnitID.VIPER,          # Abduct into army
+    ],
     # === STRUCTURES (static defense) ===
     UnitID.PLANETARYFORTRESS: [
         UnitID.BROODLORD,      # Siege from range, free broodlings

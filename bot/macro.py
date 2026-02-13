@@ -61,6 +61,7 @@ _STRUCT_PREREQUISITES: dict[UnitID, list[UnitID]] = {
     UnitID.GREATERSPIRE: [UnitID.HIVE, UnitID.SPIRE],
     UnitID.BANELINGNEST: [UnitID.SPAWNINGPOOL],
     UnitID.ROACHWARREN: [UnitID.SPAWNINGPOOL],
+    UnitID.HIVE: [UnitID.LAIR],
 }
 
 # LAIR/HIVE equivalences for prerequisite checking
@@ -267,7 +268,7 @@ class MacroManager:
             return {UnitID.ZERGLING: {"proportion": 1.0, "priority": 0}}
 
         # Filter negligible proportions first
-        filtered = {k: v for k, v in comp.items() if v >= 0.05}
+        filtered = {k: v for k, v in comp.items() if v >= 0.02}
         if not filtered:
             return {UnitID.ZERGLING: {"proportion": 1.0, "priority": 0}}
 
@@ -333,21 +334,31 @@ class MacroManager:
         if best_gas_unit is None:
             return army_comp
 
-        # Calculate boost amount (up to 15%)
-        boost = min(0.15, (vespene - 500) / 3000)
+        # Calculate boost amount — tiered caps based on gas severity
+        gas_excess = vespene - 500
+        if vespene > minerals * 10:
+            boost = min(0.40, gas_excess / 2000)   # extreme: up to 40%
+        elif vespene > minerals * 5:
+            boost = min(0.30, gas_excess / 2500)   # severe: up to 30%
+        else:
+            boost = min(0.15, gas_excess / 3000)   # normal: up to 15%
 
-        # Steal from zero-gas units (lings)
-        zero_gas_units = [
+        # Steal from cheap units — zero-gas always, low-gas when extreme
+        # Never steal from the unit we're boosting
+        gas_threshold = 25 if vespene > minerals * 5 else 0
+        steal_candidates = [
             uid for uid in army_comp
-            if UNIT_PROFILES.get(uid) and UNIT_PROFILES[uid].gas_cost == 0
+            if uid != best_gas_unit
+            and UNIT_PROFILES.get(uid)
+            and UNIT_PROFILES[uid].gas_cost <= gas_threshold
         ]
-        if not zero_gas_units:
+        if not steal_candidates:
             return army_comp
 
         # Apply the override
         result = dict(army_comp)
         stolen = 0.0
-        for uid in zero_gas_units:
+        for uid in steal_candidates:
             entry = dict(result[uid])
             can_steal = min(entry["proportion"] - 0.05, boost - stolen)
             if can_steal > 0:
@@ -426,13 +437,17 @@ class MacroManager:
                 continue
 
             # Gate: don't request structures whose prerequisites aren't met
-            if structure_id not in _MORPH_STRUCTURES and not self._prerequisites_met(structure_id):
+            if not self._prerequisites_met(structure_id):
                 continue
 
             if not self._should_request(structure_id):
                 continue
 
             if structure_id in _MORPH_STRUCTURES:
+                # Verify source building exists and is ready
+                source_type = _MORPH_MAP[structure_id][0]
+                if not any(b.is_ready for b in structs.get(source_type, [])):
+                    continue
                 ai.register_behavior(
                     TechUp(structure_id, base_location=base)
                 )
@@ -483,9 +498,9 @@ class MacroManager:
                 continue
 
             source_type, ability = morph_info
-            success = self._force_morph(source_type, req.structure_id, ability, structs)
+            result = self._force_morph(source_type, req.structure_id, ability, structs)
 
-            if success:
+            if not result:
                 req.escalated = True
                 req.last_attempt = now
                 if logger:
@@ -497,14 +512,14 @@ class MacroManager:
                         "attempts": req.attempts,
                     })
             else:
-                # Couldn't find idle source — update attempt time so we
-                # retry after FORCE_RETRY_INTERVAL
+                # Failed — update attempt time so we retry after
+                # FORCE_RETRY_INTERVAL
                 req.last_attempt = now
                 if logger:
                     logger.log_decision("macro", "force_morph_failed", {
                         "target": req.structure_id.name,
                         "source": source_type.name,
-                        "reason": "no_idle_source",
+                        "reason": result,
                         "elapsed": round(now - req.requested_at, 1),
                     })
 
@@ -530,38 +545,38 @@ class MacroManager:
         target_type: UnitID,
         ability: AbilityId,
         structs: dict,
-    ) -> bool:
+    ) -> str:
         """Find a source building and issue a morph command directly.
 
         SC2 accepts morph commands on busy hatcheries — the morph queues
         behind current production. So we try idle first, then fall back
         to any ready building.
 
-        Returns True if a morph command was issued, False otherwise.
+        Returns empty string on success, or a failure reason string.
         """
         ai = self.ai
 
         # Don't double-morph — already_pending covers in-progress morphs
         if ai.already_pending(target_type) > 0:
-            return False
+            return "already_pending"
 
         # Don't issue if we can't afford it
         if not ai.can_afford(target_type):
-            return False
+            return "cant_afford"
 
         source_buildings = [b for b in structs.get(source_type, []) if b.is_ready]
         if not source_buildings:
-            return False
+            return "no_source_building"
 
         # Prefer idle, fall back to any ready building
         for building in source_buildings:
             if building.is_idle:
                 building(ability)
-                return True
+                return ""
 
         # No idle building — SC2 queues morph behind current production
         source_buildings[0](ability)
-        return True
+        return ""
 
     # ------------------------------------------------------------------
     # Evo chambers — always useful for upgrades

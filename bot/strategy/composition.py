@@ -44,6 +44,7 @@ class EnemyArchetype(Enum):
     LING_BANE = auto()       # Zergling/Baneling aggro
     ROACH_HYDRA = auto()     # Roach/Hydra mid-game
     MUTA_LING = auto()       # Mutalisk harass
+    LATE_ZERG = auto()       # Infestor/Viper/Broodlord/Ultra late-game
     # Cross-race overlays
     AGGRESSIVE = auto()      # Early pressure / all-in
     TURTLE = auto()          # Heavy static defense, low army
@@ -81,8 +82,9 @@ _PROTOSS_STARGATE = {
 _PROTOSS_SKYTOSS_CORE = {UnitID.CARRIER, UnitID.TEMPEST, UnitID.VOIDRAY}
 
 _ZERG_GROUND_AGGRO = {UnitID.ZERGLING, UnitID.BANELING}
-_ZERG_ROACH_COMP = {UnitID.ROACH, UnitID.RAVAGER, UnitID.HYDRALISK}
-_ZERG_AIR = {UnitID.MUTALISK, UnitID.CORRUPTOR, UnitID.BROODLORD}
+_ZERG_ROACH_COMP = {UnitID.ROACH, UnitID.RAVAGER, UnitID.HYDRALISK, UnitID.LURKERMP}
+_ZERG_AIR = {UnitID.MUTALISK, UnitID.CORRUPTOR, UnitID.BROODLORD, UnitID.VIPER}
+_ZERG_LATE_SUPPORT = {UnitID.INFESTOR, UnitID.VIPER, UnitID.SWARMHOSTMP, UnitID.ULTRALISK}
 
 # All air units across all races (for air_fraction calculation)
 _ALL_AIR_UNITS = {
@@ -390,10 +392,15 @@ class CompositionClassifier:
         aggro_value = self._group_value(comp, _ZERG_GROUND_AGGRO)
         roach_value = self._group_value(comp, _ZERG_ROACH_COMP)
         air_value = self._group_value(comp, _ZERG_AIR)
-        total = aggro_value + roach_value + air_value
+        late_value = self._group_value(comp, _ZERG_LATE_SUPPORT)
+        total = aggro_value + roach_value + air_value + late_value
 
         if total <= 0:
             return EnemyArchetype.UNKNOWN
+
+        # Late-game detection — Infestor/Viper/Ultra/SwarmHost presence
+        if late_value / total > 0.15 or (late_value > 0 and air_value / total > 0.2):
+            return EnemyArchetype.LATE_ZERG
 
         # Mutalisk presence is distinctive
         muta_count = comp.get(UnitID.MUTALISK, 0)

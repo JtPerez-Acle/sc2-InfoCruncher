@@ -203,7 +203,7 @@ class BattlefieldAwareness:
             estimate.heading = self._enemy_heading
             estimate.confidence = 1.0
             estimate.estimated_supply = sum(
-                u.supply_cost if hasattr(u, "supply_cost") else 2.0
+                u._type_data._proto.food_required
                 for u in enemy_combat
             )
             estimate.contains_air = any(u.is_flying for u in enemy_combat)

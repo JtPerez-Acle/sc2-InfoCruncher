@@ -27,6 +27,12 @@ from bot.strategy.unit_counter_db import (
     get_unit_value,
 )
 
+# Morph chain: structures that need a predecessor morph to exist first
+_MORPH_PREREQS: dict[UnitID, UnitID] = {
+    UnitID.HIVE: UnitID.LAIR,
+    UnitID.GREATERSPIRE: UnitID.SPIRE,
+}
+
 if TYPE_CHECKING:
     from bot.strategy.composition import CompositionAnalysis
 
@@ -121,7 +127,7 @@ class ThreatModel:
 
         # --- Infer enemy state ---
         assessment.enemy_tech_level = self._infer_tech_level(
-            enemy_structures, game_time
+            enemy_structures, game_time, enemy_comp=enemy_comp
         )
         assessment.enemy_has_air = self._has_air_capability(
             enemy_comp, enemy_structures
@@ -225,13 +231,27 @@ class ThreatModel:
     # ------------------------------------------------------------------
 
     def _infer_tech_level(
-        self, enemy_structures: set[UnitID], game_time: float
+        self,
+        enemy_structures: set[UnitID],
+        game_time: float,
+        enemy_comp: dict[UnitID, int] | None = None,
     ) -> str:
-        """Infer enemy tech level from visible structures + game time.
+        """Infer enemy tech level from visible structures, units, + game time.
 
-        We use BOTH structure observations AND time as a fallback.
+        We use structures, unit sightings, AND time as a fallback.
         If we haven't scouted, time gives a conservative estimate.
         """
+        # Unit-based inference — strongest signal (e.g., Ultralisk → HIVE)
+        if enemy_comp:
+            late_units = {
+                UnitID.ULTRALISK, UnitID.BROODLORD, UnitID.VIPER,
+                UnitID.MOTHERSHIP, UnitID.CARRIER, UnitID.TEMPEST,
+                UnitID.BATTLECRUISER, UnitID.GHOST,
+                UnitID.INFESTOR, UnitID.LURKERMP,
+            }
+            if any(uid in enemy_comp for uid in late_units):
+                return "late"
+
         # Late game indicators
         late_indicators = {
             UnitID.FLEETBEACON, UnitID.TEMPLARARCHIVE, UnitID.DARKSHRINE,
@@ -549,6 +569,12 @@ class ThreatModel:
                 if req in seen:
                     continue
                 if not self._has_structure(req, own_structures):
+                    # Add morph prerequisite first (e.g., LAIR before HIVE)
+                    morph_source = _MORPH_PREREQS.get(req)
+                    if morph_source and morph_source not in seen:
+                        if not self._has_structure(morph_source, own_structures):
+                            needed.append(morph_source)
+                            seen.add(morph_source)
                     needed.append(req)
                     seen.add(req)
 

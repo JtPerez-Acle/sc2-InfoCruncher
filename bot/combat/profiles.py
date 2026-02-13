@@ -173,6 +173,16 @@ ENGAGEMENT_PROFILES: dict[str, EngagementProfile] = {
         spread_distance=1.5,
     ),
 
+    "LATE_ZERG": EngagementProfile(
+        name="LATE_ZERG",
+        focus_targets=(
+            UnitID.INFESTOR, UnitID.VIPER, UnitID.BROODLORD, UnitID.ULTRALISK,
+        ),
+        kite_style=KiteStyle.STUTTER_BACK,
+        spread_distance=4.0,
+        ability_priorities=("fungal_dodge", "bile_clumps"),
+    ),
+
     # ======= CROSS-RACE OVERLAYS =======
 
     "AGGRESSIVE": EngagementProfile(

@@ -680,3 +680,146 @@ def _read_jsonl(log_dir) -> list[dict]:
             if line:
                 records.append(json.loads(line))
     return records
+
+
+# =============================================================================
+# Phase 1: Enhanced snapshot fields
+# =============================================================================
+
+
+class TestEnhancedSnapshots:
+    """Verify new ML-ready fields in state snapshots."""
+
+    def test_snapshot_has_income_rates(self, mock_bot):
+        from bot.logging.snapshot import collect_state_snapshot
+
+        snap = collect_state_snapshot(mock_bot, step=10)
+        assert snap["income_minerals"] == 1200.0
+        assert snap["income_vespene"] == 400.0
+
+    def test_snapshot_has_saturation_ratio(self, mock_bot):
+        from bot.logging.snapshot import collect_state_snapshot
+
+        # mock_bot has 1 townhall and 30 workers
+        snap = collect_state_snapshot(mock_bot, step=10)
+        expected = round(30 / (1 * 16), 3)  # 1.875
+        assert snap["saturation_ratio"] == expected
+
+    def test_snapshot_saturation_multi_base(self, mock_bot):
+        from bot.logging.snapshot import collect_state_snapshot
+        from tests.conftest import MockUnit
+
+        # Add a second townhall
+        mock_bot.townhalls = type(mock_bot.townhalls)(
+            [MockUnit(1000), MockUnit(1001)]
+        )
+        snap = collect_state_snapshot(mock_bot, step=10)
+        expected = round(30 / (2 * 16), 3)  # 0.938
+        assert snap["saturation_ratio"] == expected
+
+    def test_snapshot_income_missing_gracefully(self, mock_bot):
+        """If score API lacks income fields, defaults to 0.0."""
+        from bot.logging.snapshot import collect_state_snapshot
+        from types import SimpleNamespace
+
+        mock_bot.state.score = SimpleNamespace(
+            collected_minerals=5000,
+            collected_vespene=2000,
+        )
+        snap = collect_state_snapshot(mock_bot, step=10)
+        assert snap["income_minerals"] == 0.0
+        assert snap["income_vespene"] == 0.0
+
+
+class TestFirstObservationLogging:
+    """Verify first_observed event logging."""
+
+    def test_first_observation_logged_once(self, mock_bot, log_dir):
+        """Same unit type should only produce one first_observed event."""
+        from bot.logging.game_logger import GameLogger
+
+        logger = GameLogger(mock_bot, mock_bot.config)
+
+        logger.log_first_observation("MARINE", 60.0, [50.0, 30.0])
+        logger.log_first_observation("MARINE", 120.0, [55.0, 35.0])
+        logger.log_first_observation("SIEGETANK", 90.0)
+        logger.on_game_end("Victory")
+
+        records = _read_jsonl(log_dir)
+        first_obs = [
+            r for r in records
+            if r.get("type") == "event" and r.get("event") == "first_observed"
+        ]
+        assert len(first_obs) == 2
+        types = {r["unit_type"] for r in first_obs}
+        assert types == {"MARINE", "SIEGETANK"}
+        # First one should have position
+        marine = [r for r in first_obs if r["unit_type"] == "MARINE"][0]
+        assert marine["extra"]["position"] == [50.0, 30.0]
+
+
+class TestEnemySightingTracking:
+    """Verify enemy tag sighting and kill resolution."""
+
+    def test_enemy_sighting_new_tag(self, mock_bot, log_dir):
+        """New enemy tags produce enemy_sighted events."""
+        from bot.logging.game_logger import GameLogger
+        from tests.conftest import MockUnit, MockUnits
+        from types import SimpleNamespace
+
+        logger = GameLogger(mock_bot, mock_bot.config)
+
+        # Simulate visible enemies
+        enemy1 = MockUnit(5001, type_id=SimpleNamespace(name="MARINE"))
+        enemy2 = MockUnit(5002, type_id=SimpleNamespace(name="SIEGETANK"))
+        mock_bot.all_enemy_units = MockUnits([enemy1, enemy2])
+
+        logger.track_enemy_sightings()
+        logger.on_game_end("Victory")
+
+        records = _read_jsonl(log_dir)
+        sightings = [
+            r for r in records
+            if r.get("type") == "event" and r.get("event") == "enemy_sighted"
+        ]
+        assert len(sightings) == 2
+        types = {r["unit_type"] for r in sightings}
+        assert types == {"MARINE", "SIEGETANK"}
+
+    def test_enemy_sighting_known_tag_no_duplicate(self, mock_bot, log_dir):
+        """Known enemy tags do not produce duplicate sighting events."""
+        from bot.logging.game_logger import GameLogger
+        from tests.conftest import MockUnit, MockUnits
+        from types import SimpleNamespace
+
+        logger = GameLogger(mock_bot, mock_bot.config)
+
+        enemy1 = MockUnit(5001, type_id=SimpleNamespace(name="MARINE"))
+        mock_bot.all_enemy_units = MockUnits([enemy1])
+
+        logger.track_enemy_sightings()
+        logger.track_enemy_sightings()  # Second call, same tag
+        logger.on_game_end("Victory")
+
+        records = _read_jsonl(log_dir)
+        sightings = [
+            r for r in records
+            if r.get("type") == "event" and r.get("event") == "enemy_sighted"
+        ]
+        assert len(sightings) == 1
+
+    def test_enemy_tag_resolves_kill_type(self, mock_bot):
+        """get_unit_type_for_tag resolves enemy tags."""
+        from bot.logging.game_logger import GameLogger
+
+        logger = GameLogger(mock_bot, mock_bot.config)
+
+        # Manually populate enemy tag map
+        logger._enemy_tags_seen[5001] = "MARINE"
+
+        assert logger.get_unit_type_for_tag(5001) == "MARINE"
+        assert logger.get_unit_type_for_tag(9999) == "UNKNOWN"
+
+        # Own tags take priority
+        logger._tag_type_map[5001] = "ZERGLING"
+        assert logger.get_unit_type_for_tag(5001) == "ZERGLING"

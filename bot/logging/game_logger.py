@@ -106,6 +106,12 @@ class GameLogger:
         # Tag -> unit type name mapping (for destroyed events)
         self._tag_type_map: dict[int, str] = {}
 
+        # First-observation tracking (Phase 2: opponent modeling)
+        self._enemy_types_first_logged: set[str] = set()
+
+        # Enemy tag tracking (Phase 3: sighting + kill resolution)
+        self._enemy_tags_seen: dict[int, str] = {}  # tag -> unit_type_name
+
         # Combat stats for summary
         self._total_engagements: int = 0
         self._engagements_won: int = 0
@@ -156,6 +162,9 @@ class GameLogger:
                 if th.position != ai.start_location:
                     self._first_expansion_time = ai.time
                     break
+
+        # Track new enemy sightings (before snapshot so delta captures them)
+        self.track_enemy_sightings()
 
         # State snapshot (subsampled)
         if iteration % self._snapshot_interval == 0:
@@ -333,8 +342,68 @@ class GameLogger:
             self._engagements_lost += 1
 
     def get_unit_type_for_tag(self, tag: int) -> str:
-        """Look up unit type name from our tag map."""
-        return self._tag_type_map.get(tag, "UNKNOWN")
+        """Look up unit type name from our tag maps (own + enemy)."""
+        result = self._tag_type_map.get(tag)
+        if result:
+            return result
+        result = self._enemy_tags_seen.get(tag)
+        if result:
+            return result
+        return "UNKNOWN"
+
+    def track_enemy_sightings(self) -> None:
+        """Diff visible enemy units against known tags. Log new sightings."""
+        if not self._enabled or not self._event_logging:
+            return
+
+        ai = self.ai
+        try:
+            all_enemy = ai.all_enemy_units
+            if not all_enemy:
+                return
+        except Exception:
+            return
+
+        for unit in all_enemy:
+            tag = unit.tag
+            if tag not in self._enemy_tags_seen:
+                type_name = unit.type_id.name
+                self._enemy_tags_seen[tag] = type_name
+                pos = [round(unit.position.x, 1), round(unit.position.y, 1)]
+                self.log_event(
+                    event="enemy_sighted",
+                    unit_type=type_name,
+                    unit_tag=tag,
+                    is_own=False,
+                    extra={"position": pos},
+                )
+
+    def log_first_observation(
+        self,
+        unit_type: str,
+        game_time: float,
+        position: list[float] | None = None,
+    ) -> None:
+        """Log first observation of an enemy unit type. Once per type per game."""
+        if not self._enabled or not self._event_logging:
+            return
+        if unit_type in self._enemy_types_first_logged:
+            return
+        self._enemy_types_first_logged.add(unit_type)
+
+        record: dict[str, Any] = {
+            "type": "event",
+            "game_time": round(game_time, 1),
+            "step": self.ai.state.game_loop,
+            "event": "first_observed",
+            "unit_type": unit_type,
+            "unit_tag": 0,
+            "is_own": False,
+        }
+        if position:
+            record["extra"] = {"position": position}
+        self._write(record)
+        self._total_events += 1
 
     def on_game_end(self, result: str) -> None:
         """Write game summary and perform final flush."""
@@ -384,6 +453,8 @@ class GameLogger:
             "time_in_retreat": round(self._time_in_retreat, 1),
             "time_in_regroup": round(self._time_in_regroup, 1),
             "army_wipes": self._army_wipes,
+            # Enemy tracking
+            "enemy_tags_tracked": len(self._enemy_tags_seen),
             # Logging meta
             "total_snapshots": self._total_snapshots,
             "total_decisions": self._total_decisions,
@@ -402,6 +473,23 @@ class GameLogger:
         # Info-gain scheduler stats
         if self._scheduler is not None:
             summary["info_gain"] = self._scheduler.get_stats()
+
+        # Discovery timeline (opponent modeling)
+        try:
+            analyzer = self.ai.strategic_analyzer
+            summary["discovery_timeline"] = [
+                {"time": round(t, 1), "unit_type": name, "peak_count": count}
+                for t, name, count in analyzer.memory.get_discovery_timeline()
+            ]
+        except Exception:
+            pass
+
+        # Engagement tracker stats
+        try:
+            eng_tracker = self.ai._engagement_tracker
+            summary["engagement_tracker"] = eng_tracker.get_stats()
+        except Exception:
+            pass
 
         self._write(summary)
         self._sync_flush()

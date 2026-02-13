@@ -118,6 +118,28 @@ class StrategicAnalyzer:
         estimated_value = self.memory.get_estimated_enemy_value(now)
         cumulative_comp = self.memory.get_cumulative_enemy_comp()
 
+        # --- Log first observations of new enemy unit types ---
+        logger = getattr(ai, "game_logger", None)
+        if logger:
+            for unit_type, count in enemy_comp.items():
+                if count > 0:
+                    snap = self.memory.enemy_history.get(unit_type)
+                    if snap and abs(snap.first_seen_time - now) < 0.1:
+                        pos = None
+                        try:
+                            for u in (ai.enemy_units or []):
+                                if u.type_id == unit_type:
+                                    pos = [
+                                        round(u.position.x, 1),
+                                        round(u.position.y, 1),
+                                    ]
+                                    break
+                        except Exception:
+                            pass
+                        logger.log_first_observation(
+                            unit_type.name, now, pos
+                        )
+
         # --- Phase 0.5: Composition classification ---
         composition = self.classifier.classify(
             cumulative_comp=cumulative_comp,

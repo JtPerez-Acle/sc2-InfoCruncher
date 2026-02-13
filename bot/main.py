@@ -12,6 +12,7 @@ from ares.consts import UnitRole
 from bot.combat import CombatSystem, RALLYING_ROLE
 from bot.combat.constants import CombatObjective
 from bot.logging import GameLogger
+from bot.logging.engagement_tracker import EngagementTracker
 from bot.macro import MacroManager
 from bot.queens import QueenManager
 from bot.scouting import ScoutingManager
@@ -54,6 +55,7 @@ class MyBot(AresBot):
         self.game_logger = GameLogger(self, self.config)
         self.strategic_analyzer = StrategicAnalyzer(self)
         self.scouting_manager = ScoutingManager(self)
+        self._engagement_tracker = EngagementTracker()
 
     async def on_step(self, iteration: int) -> None:
         await super(MyBot, self).on_step(iteration)
@@ -178,18 +180,21 @@ class MyBot(AresBot):
 
     async def on_unit_destroyed(self, unit_tag: int) -> None:
         await super(MyBot, self).on_unit_destroyed(unit_tag)
-        # Look up type from our tag map (own units) or from visible enemies
-        unit_type = self.game_logger.get_unit_type_for_tag(unit_tag)
-        is_own = unit_type != "UNKNOWN"
+        # Look up type from own tag map first
+        unit_type = self.game_logger._tag_type_map.get(unit_tag)
+        is_own = unit_type is not None
         if not is_own:
-            # Check if it was a visible enemy unit
-            try:
-                for enemy in self.all_enemy_units:
-                    if enemy.tag == unit_tag:
-                        unit_type = enemy.type_id.name
-                        break
-            except Exception:
-                pass
+            # Check enemy tag map (populated by track_enemy_sightings)
+            unit_type = self.game_logger._enemy_tags_seen.get(unit_tag)
+            if unit_type is None:
+                unit_type = "UNKNOWN"
+                try:
+                    for enemy in self.all_enemy_units:
+                        if enemy.tag == unit_tag:
+                            unit_type = enemy.type_id.name
+                            break
+                except Exception:
+                    pass
         self.game_logger.log_event(
             event="unit_destroyed",
             unit_type=unit_type,
@@ -215,6 +220,22 @@ class MyBot(AresBot):
 
     async def on_end(self, game_result) -> None:
         """Called when the game ends."""
+        # Force-end any active engagement before summary
+        if hasattr(self, "_engagement_tracker"):
+            # Build combat-only dict (excludes drones/overlords/eggs)
+            combat_dict: dict = {}
+            for role in (UnitRole.ATTACKING, RALLYING_ROLE):
+                for u in (self.mediator.get_units_from_role(role=role) or []):
+                    combat_dict.setdefault(u.type_id, []).append(u)
+            record = self._engagement_tracker.force_end(
+                self.time,
+                self.state.game_loop,
+                combat_dict,
+                list(self.enemy_units or []),
+            )
+            if record is not None:
+                self.game_logger._write(record)
+
         result_str = str(game_result).split(".")[-1] if game_result else "Undecided"
         self.game_logger.on_game_end(result_str)
         await super(MyBot, self).on_end(game_result)

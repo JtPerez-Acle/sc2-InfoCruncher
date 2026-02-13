@@ -360,3 +360,21 @@ class TestCompositionAnalysis:
             comp, set(), "Terran", 300.0, 2, 20,
         )
         assert result.anti_armor_priority is False
+
+    def test_classify_late_zerg_with_infestor_viper(self, classifier):
+        """Enemy Zerg with roach+hydra+infestor+viper → LATE_ZERG."""
+        comp = {
+            UnitID.ROACH: 8, UnitID.HYDRALISK: 6,
+            UnitID.INFESTOR: 3, UnitID.VIPER: 2,
+        }
+        result = classifier.classify(comp, set(), "Zerg", 600.0, 3, 30)
+        assert result.archetype == EnemyArchetype.LATE_ZERG
+
+    def test_classify_late_zerg_air_plus_casters(self, classifier):
+        """Broodlord + viper combo should trigger LATE_ZERG."""
+        comp = {
+            UnitID.ROACH: 5, UnitID.HYDRALISK: 5,
+            UnitID.BROODLORD: 3, UnitID.VIPER: 1,
+        }
+        result = classifier.classify(comp, set(), "Zerg", 600.0, 3, 30)
+        assert result.archetype == EnemyArchetype.LATE_ZERG

@@ -39,6 +39,8 @@ Logging:
     FlushInterval: 50
     DeltaTracking: True
     LogDirectory: "data/logs"
+    EngagementTracking: True
+    EnemySightingTracking: True
 
 # Info-gain observation scheduler (Phase 3)
 InfoGain:

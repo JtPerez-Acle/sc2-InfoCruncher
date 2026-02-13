@@ -74,6 +74,27 @@ class StateSnapshot(TypedDict, total=False):
     last_engagement_sim: str | None  # EngagementResult.name or None
     last_engagement_value: int | None  # EngagementResult.value (0-10 scale)
 
+    # Economy rates (from SC2 score API)
+    income_minerals: float  # current mineral collection rate
+    income_vespene: float  # current gas collection rate
+    saturation_ratio: float  # supply_workers / (num_bases * 16)
+
+    # Spending diagnosis
+    is_larva_bound: bool
+    is_tech_bound: bool
+    is_supply_bound: bool
+    is_gas_bound: bool
+    mineral_float: int  # current mineral bank when floating
+    float_duration: float  # seconds floating >400 minerals
+
+    # Strategic intelligence
+    enemy_archetype: str  # from CompositionClassifier
+    enemy_archetype_confidence: float
+    threat_level: float  # 0.0–1.0
+    army_advantage: float  # own_value / enemy_value
+    info_staleness: float  # seconds since last enemy observation
+    enemy_tech_level: str  # "early" | "mid" | "late"
+
     # Delta from previous snapshot
     delta: DeltaRecord | None
 
@@ -163,3 +184,60 @@ class SkipRecord(TypedDict, total=False):
     priority: float
     reason: str
     threshold: float
+
+
+class ArmySnapshot(TypedDict, total=False):
+    """Snapshot of an army at a point in time."""
+
+    units: dict[str, int]  # unit_type_name -> count
+    supply: float
+    value: float  # from compute_army_value
+
+
+class EngagementRecord(TypedDict, total=False):
+    """One discrete combat engagement from start to end."""
+
+    type: str  # "engagement"
+    engagement_id: int
+    game_time_start: float
+    game_time_end: float
+    duration: float  # seconds
+    step_start: int
+    step_end: int
+
+    # Position context
+    position: list[float]  # [x, y] center of engagement
+    distance_from_home: float
+
+    # Army snapshots
+    own_army_before: ArmySnapshot
+    own_army_after: ArmySnapshot
+    enemy_army_before: ArmySnapshot
+    enemy_army_after: ArmySnapshot
+
+    # Casualties
+    own_losses: dict[str, int]  # unit_type -> count lost
+    enemy_losses: dict[str, int]
+    own_supply_lost: float
+    enemy_supply_lost: float
+
+    # Prediction vs. outcome
+    sim_prediction: str  # EngagementResult.name
+    actual_outcome: str  # "won" | "lost" | "draw" | "disengaged"
+    prediction_correct: bool
+
+    # Context
+    combat_objective: str
+    engagement_profile: str
+    approach_style: str
+    micro_style: str
+    was_committed: bool
+    confidence: float
+
+    # Economy context at engagement start
+    own_minerals: int
+    own_vespene: int
+    income_minerals: float
+    income_vespene: float
+    own_supply_used: int
+    own_worker_count: int

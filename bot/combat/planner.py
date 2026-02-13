@@ -24,7 +24,9 @@ from bot.combat.constants import (
     FLYER_TYPES,
     HARASS_MAX_FRACTION,
     HARASS_MIN_ARMY_SUPPLY,
+    MIN_ATTACK_ARMY_SUPPLY,
     MIN_ATTACK_SUPPLY,
+    MIN_REGROUP_DURATION,
     PEAK_DECAY_RATE,
     RALLYING_ROLE,
     REGROUP_RATIO,
@@ -57,6 +59,7 @@ class CombatPlanner:
         self.ai = ai
         self._attack_committed: bool = False
         self._commit_start_time: float = 0.0
+        self._regroup_start_time: float = 0.0
         self._last_plan: CombatPlan = CombatPlan()
 
     @property
@@ -155,6 +158,29 @@ class CombatPlanner:
         if supply < MIN_ATTACK_SUPPLY:
             return True
 
+        # Scale minimum with game phase — don't send 40 supply into late-game
+        min_attack = MIN_ATTACK_SUPPLY
+        if battlefield.peak_army_supply > 60:
+            min_attack = max(MIN_ATTACK_SUPPLY, battlefield.peak_army_supply * 0.4)
+        if supply < min_attack:
+            return True
+
+        # Enforce minimum regroup duration — don't exit regroup too early
+        if self._regroup_start_time > 0:
+            elapsed = now - self._regroup_start_time
+            if elapsed < MIN_REGROUP_DURATION:
+                return True
+
+        # Tiered gate: strategy confidence lowers the threshold
+        if strategy and strategy.attack_ready:
+            # Strategy says go — allow attack at lower supply
+            if supply < MIN_ATTACK_SUPPLY * 1.5:  # 30 supply
+                return True
+        else:
+            # Strategy not ready — require full army
+            if supply < MIN_ATTACK_ARMY_SUPPLY:
+                return True
+
         # Attack commitment: stay committed for ATTACK_COMMIT_TIME
         if self._attack_committed:
             if now - self._commit_start_time < ATTACK_COMMIT_TIME:
@@ -170,7 +196,7 @@ class CombatPlanner:
 
         # Strategy says not ready AND supply is borderline
         if strategy is not None:
-            if not strategy.attack_ready and supply < MIN_ATTACK_SUPPLY * 1.5:
+            if not strategy.attack_ready and supply < MIN_ATTACK_ARMY_SUPPLY:
                 return True
 
         return False
@@ -182,6 +208,10 @@ class CombatPlanner:
     ) -> CombatPlan:
         """Regroup at staging point — rebuild army."""
         staging = battlefield.staging_point or self.ai.start_location
+
+        # Record when regroup started (for minimum duration enforcement)
+        if self._regroup_start_time == 0:
+            self._regroup_start_time = battlefield.game_time
 
         plan = CombatPlan(
             objective=CombatObjective.REGROUP,
@@ -202,6 +232,8 @@ class CombatPlanner:
         if logger:
             logger.log_decision("planner", "regroup", {
                 "supply": battlefield.our_army_supply,
+                "min_attack_supply": MIN_ATTACK_ARMY_SUPPLY,
+                "regroup_elapsed": round(battlefield.game_time - self._regroup_start_time, 1),
                 "peak": round(battlefield.peak_army_supply, 1),
                 "threshold": round(battlefield.peak_army_supply * REGROUP_RATIO, 1),
                 "staging": [round(staging.x, 1), round(staging.y, 1)],
@@ -222,6 +254,9 @@ class CombatPlanner:
     ) -> CombatPlan:
         """Plan offensive action — objective, approach, squads."""
         ai = self.ai
+
+        # Reset regroup timer when attacking
+        self._regroup_start_time = 0.0
 
         # Choose objective from targets
         objective, primary_target = self._choose_objective(

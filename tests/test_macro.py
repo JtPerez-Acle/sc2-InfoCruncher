@@ -173,7 +173,7 @@ class TestForceMorph:
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is True
+        assert result == ""
         assert len(idle_hatch.commands) == 1
         assert len(busy_hatch.commands) == 0
 
@@ -185,7 +185,7 @@ class TestForceMorph:
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is True
+        assert result == ""
         assert len(busy_hatch.commands) == 1
 
     def test_blocked_by_already_pending(self):
@@ -197,7 +197,7 @@ class TestForceMorph:
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is False
+        assert result == "already_pending"
         assert len(hatch.commands) == 0
 
     def test_blocked_by_cant_afford(self):
@@ -209,16 +209,16 @@ class TestForceMorph:
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is False
+        assert result == "cant_afford"
         assert len(hatch.commands) == 0
 
     def test_no_source_buildings(self):
-        """Return False when source type has no buildings."""
+        """Return failure reason when source type has no buildings."""
         structs = {UnitID.HATCHERY: []}
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is False
+        assert result == "no_source_building"
 
     def test_skips_unready_buildings(self):
         """Unready (still building) buildings should be skipped."""
@@ -228,7 +228,7 @@ class TestForceMorph:
         result = self.manager._force_morph(
             UnitID.HATCHERY, UnitID.LAIR, AbilityId.UPGRADETOLAIR_LAIR, structs
         )
-        assert result is False
+        assert result == "no_source_building"
 
 
 # ===========================================================================
@@ -311,13 +311,14 @@ class TestGasSpendingOverride:
         assert result[UnitID.ZERGLING]["proportion"] < 0.35
 
     def test_override_boost_capped_at_15_percent(self):
-        """Boost is capped at 15 percentage points max."""
+        """Normal tier: boost capped at 15% when gas is only mildly over minerals."""
         comp = {
             UnitID.ROACH: {"proportion": 0.50, "priority": 0},
             UnitID.ZERGLING: {"proportion": 0.50, "priority": 1},
         }
-        result = self.manager._apply_gas_spending_override(comp, 100, 2000)
-        # Max boost is min(0.15, (2000-500)/3000) = min(0.15, 0.5) = 0.15
+        # vespene=800, minerals=600: 800 > 600 but NOT > 600*5=3000
+        result = self.manager._apply_gas_spending_override(comp, 600, 800)
+        # Normal tier: min(0.15, (800-500)/3000) = min(0.15, 0.1) = 0.1
         assert result[UnitID.ROACH]["proportion"] <= 0.65
         assert result[UnitID.ROACH]["proportion"] > 0.50
 
@@ -327,11 +328,11 @@ class TestGasSpendingOverride:
         assert result == {}
 
     def test_all_gas_units_no_steal(self):
-        """If all units cost gas, no override happens (nothing to steal from)."""
+        """If all units cost gas (above threshold), no override happens."""
         comp = {
-            UnitID.ROACH: {"proportion": 0.50, "priority": 0},
-            UnitID.HYDRALISK: {"proportion": 0.50, "priority": 1},
+            UnitID.HYDRALISK: {"proportion": 0.50, "priority": 0},
+            UnitID.LURKERMP: {"proportion": 0.50, "priority": 1},
         }
+        # Both units have gas_cost > 25, so no steal candidates even at extreme
         result = self.manager._apply_gas_spending_override(comp, 100, 2000)
-        # Both cost gas, so no zero-gas units to steal from
-        assert result[UnitID.ROACH]["proportion"] == 0.50
+        assert result[UnitID.HYDRALISK]["proportion"] == 0.50

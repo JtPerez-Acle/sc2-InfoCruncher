@@ -131,6 +131,8 @@ class MockState:
         self.score = SimpleNamespace(
             collected_minerals=5000,
             collected_vespene=2000,
+            collection_rate_minerals=1200.0,
+            collection_rate_vespene=400.0,
         )
 
 

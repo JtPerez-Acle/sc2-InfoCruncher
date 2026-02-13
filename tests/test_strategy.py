@@ -16,6 +16,7 @@ from bot.strategy.unit_counter_db import (
     UNIT_PROFILES,
     can_build_unit,
     get_counter_units,
+    get_ideal_counter_units,
     get_unit_value,
 )
 from bot.strategy.threat_model import ThreatAssessment, ThreatModel
@@ -486,14 +487,23 @@ class TestEconomyModel:
         assert safe.safe_to_expand is True
         assert dangerous.safe_to_expand is False
 
-    def test_dont_expand_past_five(self):
-        """Cap at 5 bases."""
+    def test_expansion_allowed_at_5_bases(self):
+        """5 bases should still allow expansion when saturated."""
         result = self._evaluate(
             threat=ThreatAssessment(threat_level=0.0),
             num_bases=5,
             supply_workers=70,
         )
-        assert result.target_bases == 5
+        assert result.target_bases >= 6
+
+    def test_expansion_capped_at_8_bases(self):
+        """Cap at 8 bases."""
+        result = self._evaluate(
+            threat=ThreatAssessment(threat_level=0.0),
+            num_bases=8,
+            supply_workers=100,
+        )
+        assert result.target_bases == 8
 
     def test_float_minerals_triggers_expand(self):
         """Floating resources with low threat → expand."""
@@ -560,3 +570,203 @@ class TestEconomyModel:
         )
         # With balanced resources, no reduction should happen
         assert result_a.target_gas == result_b.target_gas
+
+
+# ---------------------------------------------------------------------------
+# Zerg Mirror Counter Map — Round 2 additions
+# ---------------------------------------------------------------------------
+
+class TestZergMirrorCounterMap:
+    """Verify COUNTER_MAP has entries for late-game Zerg mirror units."""
+
+    def test_counter_map_has_ultralisk_entry(self):
+        """ULTRALISK should have counter entries (air + siege)."""
+        assert UnitID.ULTRALISK in COUNTER_MAP
+        counters = COUNTER_MAP[UnitID.ULTRALISK]
+        assert len(counters) >= 2
+        # Ultras can't hit air, so counters should include air/siege units
+        assert UnitID.BROODLORD in counters
+
+    def test_counter_map_has_broodlord_entry(self):
+        """BROODLORD should have counter entries (air-to-air)."""
+        assert UnitID.BROODLORD in COUNTER_MAP
+        counters = COUNTER_MAP[UnitID.BROODLORD]
+        assert UnitID.CORRUPTOR in counters
+
+    def test_counter_map_has_all_zerg_mirror_late(self):
+        """All key Zerg mirror units should be in COUNTER_MAP."""
+        late_game_zerg = [
+            UnitID.RAVAGER,
+            UnitID.LURKERMP,
+            UnitID.INFESTOR,
+            UnitID.SWARMHOSTMP,
+            UnitID.VIPER,
+            UnitID.ULTRALISK,
+            UnitID.BROODLORD,
+        ]
+        for uid in late_game_zerg:
+            assert uid in COUNTER_MAP, f"{uid.name} missing from COUNTER_MAP"
+
+    def test_get_ideal_counter_for_ultralisk_comp(self):
+        """get_ideal_counter_units should include anti-Ultra units."""
+        enemy_comp = {UnitID.ULTRALISK: 5, UnitID.ZERGLING: 10}
+        result = get_ideal_counter_units(enemy_comp)
+        # Should recommend Broodlord or Infestor to counter Ultras
+        assert any(uid in result for uid in (UnitID.BROODLORD, UnitID.SWARMHOSTMP, UnitID.INFESTOR)), \
+            f"Expected anti-Ultra units in result, got: {result}"
+
+
+# ---------------------------------------------------------------------------
+# Composition Filter Threshold
+# ---------------------------------------------------------------------------
+
+class TestCompositionFilter:
+    """Test that _to_spawn_format keeps small proportions >= 2%."""
+
+    def test_spawn_format_keeps_small_proportions(self):
+        """Units at 3% proportion should survive the filter (threshold=2%)."""
+        from bot.macro import MacroManager
+        comp = {
+            UnitID.ROACH: 0.60,
+            UnitID.HYDRALISK: 0.30,
+            UnitID.BANELING: 0.04,  # 4% — was dropped at 5% threshold
+            UnitID.LURKERMP: 0.03,  # 3% — was dropped at 5% threshold
+            UnitID.ZERGLING: 0.03,  # 3% — was dropped at 5% threshold
+        }
+        result = MacroManager._to_spawn_format(comp)
+        # All 5 units should be present (none dropped)
+        assert len(result) == 5, f"Expected 5 units, got {len(result)}: {list(result.keys())}"
+        assert UnitID.BANELING in result
+        assert UnitID.LURKERMP in result
+
+
+# ---------------------------------------------------------------------------
+# Morph Chain in Tech Targets
+# ---------------------------------------------------------------------------
+
+class TestMorphChain:
+    """Test that _compute_recommended_tech includes morph prerequisites."""
+
+    def test_recommended_tech_includes_morph_chain(self):
+        """When BROODLORD is recommended, tech should include LAIR → HIVE → GREATERSPIRE."""
+        model = ThreatModel()
+        # Ideal comp: BROODLORD at 20% (needs HIVE + GREATERSPIRE)
+        ideal_comp = {UnitID.BROODLORD: 0.20, UnitID.HYDRALISK: 0.40, UnitID.ROACH: 0.40}
+        # Own structures: only have pool + roach warren (no LAIR, no HIVE)
+        own_structures = {
+            UnitID.SPAWNINGPOOL: [SimpleNamespace()],
+            UnitID.ROACHWARREN: [SimpleNamespace()],
+        }
+        result = model._compute_recommended_tech(
+            recommended_comp={},
+            own_structures=own_structures,
+            ideal_comp=ideal_comp,
+        )
+        # Should include LAIR (morph prereq for HIVE) and HIVE
+        assert UnitID.LAIR in result, f"LAIR missing from tech targets: {result}"
+        assert UnitID.HIVE in result, f"HIVE missing from tech targets: {result}"
+        # LAIR should come before HIVE in the list
+        assert result.index(UnitID.LAIR) < result.index(UnitID.HIVE)
+
+    def test_morph_chain_skips_existing_structures(self):
+        """If LAIR already exists, only HIVE should be added."""
+        model = ThreatModel()
+        ideal_comp = {UnitID.BROODLORD: 0.20, UnitID.HYDRALISK: 0.40}
+        own_structures = {
+            UnitID.SPAWNINGPOOL: [SimpleNamespace()],
+            UnitID.LAIR: [SimpleNamespace()],
+            UnitID.SPIRE: [SimpleNamespace()],
+        }
+        result = model._compute_recommended_tech(
+            recommended_comp={},
+            own_structures=own_structures,
+            ideal_comp=ideal_comp,
+        )
+        assert UnitID.LAIR not in result, "LAIR should not be added (already exists)"
+        assert UnitID.HIVE in result
+
+
+# ---------------------------------------------------------------------------
+# Tech Level Inference from Enemy Units
+# ---------------------------------------------------------------------------
+
+class TestTechLevelInference:
+    """Test that enemy tech level is inferred from unit sightings."""
+
+    def test_infer_late_tech_from_enemy_units(self):
+        """Seeing Ultralisks should trigger 'late' tech detection."""
+        model = ThreatModel()
+        enemy_structures = {UnitID.LAIR, UnitID.HYDRALISKDEN}  # mid indicators
+        enemy_comp = {UnitID.ULTRALISK: 3, UnitID.ZERGLING: 10}
+        result = model._infer_tech_level(enemy_structures, 600.0, enemy_comp=enemy_comp)
+        assert result == "late", f"Expected 'late' with Ultralisks, got '{result}'"
+
+    def test_stays_mid_without_late_units(self):
+        """Without late-game units, mid structures should still return 'mid'."""
+        model = ThreatModel()
+        enemy_structures = {UnitID.LAIR, UnitID.HYDRALISKDEN}
+        enemy_comp = {UnitID.ROACH: 10, UnitID.HYDRALISK: 5}
+        result = model._infer_tech_level(enemy_structures, 600.0, enemy_comp=enemy_comp)
+        assert result == "mid"
+
+    def test_infestor_triggers_late_tech(self):
+        """INFESTOR should trigger 'late' tech detection."""
+        model = ThreatModel()
+        enemy_structures = {UnitID.LAIR}
+        enemy_comp = {UnitID.ROACH: 10, UnitID.INFESTOR: 2}
+        result = model._infer_tech_level(enemy_structures, 600.0, enemy_comp=enemy_comp)
+        assert result == "late", f"Expected 'late' with Infestors, got '{result}'"
+
+    def test_lurker_triggers_late_tech(self):
+        """LURKERMP should trigger 'late' tech detection."""
+        model = ThreatModel()
+        enemy_structures = {UnitID.LAIR}
+        enemy_comp = {UnitID.ROACH: 10, UnitID.LURKERMP: 3}
+        result = model._infer_tech_level(enemy_structures, 600.0, enemy_comp=enemy_comp)
+        assert result == "late", f"Expected 'late' with Lurkers, got '{result}'"
+
+
+class TestGasTargetHeavyReduction:
+    """Test aggressive gas extractor reduction at high vespene levels."""
+
+    def setup_method(self):
+        self.model = EconomyModel()
+
+    def _evaluate(self, threat=None, **kwargs):
+        if threat is None:
+            threat = ThreatAssessment()
+        defaults = dict(
+            threat=threat,
+            supply_workers=30,
+            supply_army=15,
+            num_bases=4,
+            minerals=300,
+            vespene=100,
+            num_extractors=8,
+        )
+        defaults.update(kwargs)
+        return self.model.evaluate(**defaults)
+
+    def test_gas_target_heavy_reduction_at_5k_vespene(self):
+        """At 5000 vespene, new tiers should reduce target to minimum (1)."""
+        gas_heavy = ThreatAssessment(
+            recommended_comp={UnitID.HYDRALISK: 0.5, UnitID.ROACH: 0.3}
+        )
+        extreme = self._evaluate(
+            threat=gas_heavy, num_bases=5, minerals=200, vespene=5000,
+        )
+        # With -1 (>400), -2 (>800), -3 (>2000), -5 (>4000) = -11 total
+        # Should hit floor of 1
+        assert extreme.target_gas == 1, (
+            f"Expected target_gas=1 at 5000 vespene, got {extreme.target_gas}"
+        )
+
+    def test_gas_target_never_below_one(self):
+        """Even at extreme banking, target gas should stay >= 1."""
+        gas_light = ThreatAssessment(
+            recommended_comp={UnitID.ZERGLING: 0.9}
+        )
+        result = self._evaluate(
+            threat=gas_light, num_bases=3, minerals=100, vespene=10000,
+        )
+        assert result.target_gas >= 1
